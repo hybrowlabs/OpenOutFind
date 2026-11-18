@@ -33,7 +33,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from openoutfind.core.config import SiteConfig
-from openoutfind.core.errors import ErrorType
+from openoutfind.core.errors import ErrorType, OpenOutFindError
 from openoutfind.enrichment.provider import ProviderUnavailable
 
 logger = logging.getLogger(__name__)
@@ -60,6 +60,7 @@ def search(config: SiteConfig, filters: dict, limit: int, offset: int):
     """One page from Lead Ocean; returns ``discovery.Fetched``."""
     from openoutfind.discovery import Fetched, Page
 
+    validate(config)
     body = {"filters": _translate(filters), "limit": limit, "offset": offset}
     started = time.monotonic()
     payload = _post(config, body)
@@ -68,8 +69,31 @@ def search(config: SiteConfig, filters: dict, limit: int, offset: int):
         raise LeadOceanUnavailable("Lead Ocean returned no 'leads' list")
     summary = payload.get("summary") or {}
     found = summary.get("leads_found") if offset == 0 else None
-    return Fetched(Page([_row(lead) for lead in leads if isinstance(lead, dict)], found),
-                   time.monotonic() - started)
+    rows = [row for lead in leads if isinstance(lead, dict)
+            if (row := _row(lead)).get("contact_linkedin_profile_url")]
+    if len(rows) < len(leads):
+        logger.debug("lead ocean: dropped %d row(s) with no profile URL", len(leads) - len(rows))
+    return Fetched(Page(rows, found), time.monotonic() - started)
+
+
+def validate(config: SiteConfig) -> None:
+    """The base URL must be ``https://`` (loopback excepted, for a local stand-in).
+
+    The bearer key rides every request, so a plain ``http://`` address would send it in the
+    clear. ``bad_config`` stops the run before any call is made.
+    """
+    from urllib.parse import urlparse
+
+    url = urlparse(config.leadocean_base_url)
+    loopback = url.hostname in ("localhost", "127.0.0.1", "::1")
+    if url.scheme == "https" and url.hostname:
+        return
+    if url.scheme == "http" and loopback:
+        return
+    raise OpenOutFindError(
+        ErrorType.BAD_CONFIG,
+        "OPENOUTFIND_LEADOCEAN_BASE_URL must be an https:// address "
+        "(the API key is sent with every request)")
 
 
 def _translate(filters: dict) -> dict:

@@ -69,9 +69,9 @@ def check_ready() -> None:
     # A malformed cap stops the run here, before any page is fetched or verdict asked.
     company_cap.limit()
 
-    # A dataset that cannot be read (missing file, wrong columns) is a bad_config now, not
-    # a failure in the middle of the first round.
-    _check_dataset()
+    # A dataset that cannot be read (missing file, wrong columns) or a Lead Ocean URL that is
+    # not https is a bad_config now, not a failure in the middle of the first round.
+    _check_sources()
 
     if not _agent_qualify_active():
         _check_llm()
@@ -96,14 +96,29 @@ def missing_variables() -> dict[str, list[str]]:
     return {group: names for group, names in groups.items() if names}
 
 
-def _check_dataset() -> None:
-    """Load the dataset when the chosen provider reads one (raises ``bad_config``)."""
+def _check_sources() -> None:
+    """Prove the chosen discovery sources are usable before a round (``bad_config``).
+
+    A dataset is loaded (missing file, wrong columns); a Lead Ocean base URL must be
+    ``https://``. In ``leadocean+dataset``, one source being complete is enough, so a
+    half-configured other source is not an error — but it is named, since the operator
+    meant to use it and would otherwise never know it was ignored.
+    """
     from openoutfind.core.config import discovery_provider
-    from openoutfind.providers import dataset
+    from openoutfind.providers import dataset, leadocean
 
     config = SiteConfig.load()
-    if discovery_provider(config) in ("dataset", "leadocean+dataset") and config.dataset_path:
+    name = discovery_provider(config)
+    if name in ("dataset", "leadocean+dataset") and config.dataset_path:
         dataset.rows(config)
+    if name in ("leadocean", "leadocean+dataset") and config.leadocean_base_url:
+        leadocean.validate(config)
+
+    if name == "leadocean+dataset":
+        if bool(config.leadocean_api_key) != bool(config.leadocean_base_url):
+            logger.warning(
+                "Lead Ocean is half configured (set both %sLEADOCEAN_API_KEY and "
+                "%sLEADOCEAN_BASE_URL) — it is being ignored this run", ENV_PREFIX, ENV_PREFIX)
 
 
 def _agent_qualify_active() -> bool:

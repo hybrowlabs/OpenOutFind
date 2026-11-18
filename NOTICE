@@ -19,6 +19,7 @@ Changes made by Hybrowlabs (OPS-636), as required by section 4(b) of the licence
     openoutfind/contacts/service.py.
   - Tests: tests/test_providers.py, tests/conftest.py, tests/test_cycle.py,
     tests/test_readiness.py.
+  - Publishing jobs do not run outside the upstream repository: .github/workflows/deploy.yml.
   - Documentation: README.md, CLAUDE.md, docs/configuration.md, NOTICE.
 
 Upstream behaviour remains available by setting OPENOUTFIND_DISCOVERY_PROVIDER=bettercontact.

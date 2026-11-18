@@ -75,7 +75,9 @@ def _search_both(config: SiteConfig, filters: dict, limit: int, offset: int):
     A source that is not configured contributes nothing (``leadocean+dataset`` is satisfied
     by either). Page ``offset..offset+limit`` of the stream is the dataset's slice and, when
     that falls short of ``limit``, Lead Ocean's first rows from where the dataset ended. The
-    count is the sum of both, and like upstream's is only reported at offset 0.
+    count is the sum of both, and like upstream's is only reported at offset 0. It is always
+    the full sum: when the dataset alone fills page one, Lead Ocean is still asked (for one
+    row) for its count, because the walk reads where a search ends off that number.
     """
     import time
 
@@ -91,19 +93,27 @@ def _search_both(config: SiteConfig, filters: dict, limit: int, offset: int):
     if use_dataset:
         local = dataset.search(config, filters, limit, offset)
         rows.extend(local.page.leads)
-        dataset_total = dataset.count(config, filters)
-    if use_ocean and len(rows) < limit:
-        remote_offset = max(0, offset - dataset_total)
-        remote = leadocean.search(config, filters, limit - len(rows), remote_offset)
-        rows.extend(remote.page.leads)
-        found_remote = remote.page.leads_found
-    else:
-        found_remote = None
+        dataset_total = (local.page.leads_found if offset == 0
+                         else dataset.count(config, filters))
+
+    found_remote = None
+    if use_ocean:
+        if len(rows) < limit:
+            # The page runs past the end of the dataset: Lead Ocean supplies the rest,
+            # from its own offset (the stream's offset less what the dataset held).
+            remote = leadocean.search(config, filters, limit - len(rows),
+                                      max(0, offset - dataset_total))
+            rows.extend(remote.page.leads)
+            found_remote = remote.page.leads_found
+        elif offset == 0:
+            # The dataset filled page one, but the stream is longer than the dataset: the
+            # walk stores this count and reads "at the bottom" off it, so a dataset-only
+            # count would cut Lead Ocean off after one page. One row is enough to be
+            # told how many there are.
+            found_remote = leadocean.search(config, filters, 1, 0).page.leads_found
 
     found = None
     if offset == 0:
-        # The stream's size. When the dataset alone filled page one, Lead Ocean was not
-        # asked (no network call), so the count is a lower bound; a count above zero is all
-        # the walk needs from it (zero is what marks a search dead).
+        # The whole stream's size: the dataset's matches plus Lead Ocean's.
         found = dataset_total + (found_remote or 0)
     return Fetched(Page(rows, found), time.monotonic() - started)
