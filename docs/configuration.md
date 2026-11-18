@@ -25,6 +25,10 @@ things before it starts working.
 | `OPENOUTFIND_AI_MODEL` | llm | `provider:model`, e.g. `anthropic:claude-sonnet-4-5-20250929`; bare `gpt-*`/`claude-*`/`gemini-*` are auto-prefixed. Providers: openai/anthropic/google/groq/mistral/cohere/openai_compatible |
 | `OPENOUTFIND_LLM_API_KEY` | llm | **verified by one live ping before every run** — a key rotated out from under a timer fails before a lead is chosen, not mid-pass |
 | `OPENOUTFIND_LLM_API_BASE` | llm | required for `openai_compatible:*`, ignored otherwise |
+| `OPENOUTFIND_DISCOVERY_PROVIDER` | discovery | **hybrowlabs fork.** `leadocean+dataset` (default), `leadocean`, `dataset` or `bettercontact` (upstream behaviour). |
+| `OPENOUTFIND_LEADOCEAN_API_KEY` | discovery | Lead Ocean key (bearer). Needed with `OPENOUTFIND_LEADOCEAN_BASE_URL` by `leadocean`; `leadocean+dataset` needs either this pair or the dataset path. Never commit it. |
+| `OPENOUTFIND_LEADOCEAN_BASE_URL` | discovery | Lead Ocean API base, e.g. `https://…/api`. The client posts to `<base>/leads/search` — an assumed contract, see `openoutfind/providers/leadocean.py`. |
+| `OPENOUTFIND_DATASET_PATH` | discovery | path to a `.csv` or `.jsonl` dataset (columns in `openoutfind/providers/dataset.py`). Filtered locally; nothing leaves the machine. |
 | `OPENOUTFIND_BETTERCONTACT_API_KEY` | bettercontact | [free account, 40 credits, no card](https://bettercontact.rocks?fpr=openoutreach) (affiliate link, no markup to you). Powers **both** Lead Finder discovery (billed nothing) **and** work-email enrichment (one credit per verified address, only with `--emails`) |
 | `OPENOUTFIND_OPERATOR_EMAIL` | account | optional. Your own inbox — the contacts-store key. Unset, the operator row is named `operator` and the install never talks to the hub (no free cached addresses, no give-back). Fills a blank row once; never replaces an email already there |
 | `OPENOUTFIND_OPERATOR_COUNTRY` | account | optional. ISO 3166 alpha-2, e.g. `US` — **your jurisdiction**, not your target market. Unset, the install contributes to the contacts store |

@@ -139,6 +139,13 @@ def configure(monkeypatch):
     for name in [n for n in os.environ if n.startswith(ENV_PREFIX)]:
         monkeypatch.delenv(name)
 
+    # The fork's default discovery source is Lead Ocean + dataset, but the suite inherited
+    # from upstream exercises the BetterContact path throughout, so a test starts on that
+    # path and says so when it wants another (``configure(discovery_provider="dataset")``).
+    # The new providers have their own tests (tests/test_providers.py, test_dataset.py,
+    # test_leadocean.py) which always name the provider they test.
+    monkeypatch.setenv(variable_for("discovery_provider"), "bettercontact")
+
     def _configure(**values) -> SiteConfig:
         for field, value in values.items():
             monkeypatch.setenv(variable_for(field), value)

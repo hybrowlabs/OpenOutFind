@@ -90,10 +90,10 @@ def discover(site_config, qualifier=None) -> bool:
     Two gates: no finder key means the index can't be reached, and no product or target
     means there is nothing to write the initial population from.
     """
+    from openoutfind import providers
     from openoutfind.core.pipeline.walk import run_round
-    from openoutfind.enrichment import bettercontact
 
-    if not bettercontact.is_configured():
+    if not providers.is_configured(site_config):
         return False
     if not (site_config.product_docs or site_config.campaign_target):
         return False

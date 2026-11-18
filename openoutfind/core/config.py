@@ -47,9 +47,19 @@ REQUIRED_LLM_FIELDS = ("ai_model", "llm_api_key")
 # — every LLM call this tool makes renders one of them into its prompt.
 REQUIRED_ICP_FIELDS = ("product_docs", "campaign_target")
 
-# Discovery itself, which is free, runs on the BetterContact key; enrichment spends it.
-# An install without one cannot search at all, so it is required rather than optional.
-REQUIRED_DISCOVERY_FIELDS = ("bettercontact_api_key",)
+# Where leads are discovered. Upstream shipped one source, BetterContact Lead Finder; this
+# fork (OPS-636) adds Lead Ocean and an operator-supplied dataset file behind the same walk.
+# ``bettercontact`` stays selectable so upstream behaviour is one variable away.
+DISCOVERY_PROVIDERS = ("leadocean+dataset", "leadocean", "dataset", "bettercontact")
+DEFAULT_DISCOVERY_PROVIDER = "leadocean+dataset"
+
+# What each single-source provider needs to search at all. ``leadocean+dataset`` is
+# satisfied by *either* source being complete (``required_discovery_fields``).
+_DISCOVERY_FIELDS = {
+    "bettercontact": ("bettercontact_api_key",),
+    "leadocean": ("leadocean_api_key", "leadocean_base_url"),
+    "dataset": ("dataset_path",),
+}
 
 
 @dataclass(frozen=True)
@@ -76,6 +86,14 @@ class SiteConfig:
     # BetterContact's key powers Lead Finder *discovery*, which is billed nothing, and the
     # paid email lookup behind `--emails`.
     bettercontact_api_key: str = ""
+
+    # Discovery source (OPS-636). Blank means ``DEFAULT_DISCOVERY_PROVIDER``. The Lead Ocean
+    # key and base URL and the dataset path come from the environment only; they are never
+    # written to the store or the repo.
+    discovery_provider: str = ""
+    leadocean_api_key: str = ""
+    leadocean_base_url: str = ""
+    dataset_path: str = ""
 
     # The operator's own ISO-3166 alpha-2 jurisdiction — not to be confused with
     # `Lead.country_code`, the per-lead target country an ICP search surfaced someone
@@ -112,6 +130,36 @@ def variable_for(field_name: str) -> str:
 def missing(config: SiteConfig, field_names) -> list[str]:
     """The variables that would have filled the named fields this run lacks."""
     return [variable_for(name) for name in field_names if not getattr(config, name)]
+
+
+def discovery_provider(config: SiteConfig) -> str:
+    """The discovery source this run uses; ``bad_config`` if the name is not one we ship."""
+    from openoutfind.core.errors import ErrorType, OpenOutFindError
+
+    name = (config.discovery_provider or DEFAULT_DISCOVERY_PROVIDER).strip().lower()
+    if name not in DISCOVERY_PROVIDERS:
+        raise OpenOutFindError(
+            ErrorType.BAD_CONFIG,
+            f"{variable_for('discovery_provider')}={name!r} is not a discovery provider; "
+            f"use one of {', '.join(DISCOVERY_PROVIDERS)}")
+    return name
+
+
+def required_discovery_fields(config: SiteConfig) -> tuple[str, ...]:
+    """The fields still missing for the chosen discovery provider, as field names.
+
+    ``leadocean+dataset`` is satisfied by either source being complete. When neither is,
+    the answer names the dataset path and the Lead Ocean pair, so one error tells an
+    operator every way out.
+    """
+    name = discovery_provider(config)
+    if name != "leadocean+dataset":
+        return tuple(f for f in _DISCOVERY_FIELDS[name] if not getattr(config, f))
+    lead_ocean = tuple(f for f in _DISCOVERY_FIELDS["leadocean"] if not getattr(config, f))
+    dataset = tuple(f for f in _DISCOVERY_FIELDS["dataset"] if not getattr(config, f))
+    if not lead_ocean or not dataset:
+        return ()
+    return dataset + lead_ocean
 
 
 def _from_environment(variable: str) -> str:
