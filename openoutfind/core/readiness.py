@@ -100,26 +100,26 @@ def _check_sources() -> None:
     """Prove the chosen discovery sources are usable before a round (``bad_config``).
 
     A dataset is loaded (missing file, wrong columns); a Lead Ocean base URL must be
-    ``https://``. In ``leadocean+dataset``, one source being complete is enough, so a
-    half-configured other source is not an error — but it is named, since the operator
-    meant to use it and would otherwise never know it was ignored.
+    ``https://``. With several sources one complete source is enough, so a half-configured
+    other one is not an error — but it is named, since the operator meant to use it and
+    would otherwise never know it was ignored.
     """
-    from openoutfind.core.config import discovery_provider
+    from openoutfind.core.config import active_sources, discovery_sources
     from openoutfind.providers import dataset, leadocean
 
     config = SiteConfig.load()
-    name = discovery_provider(config)
-    if name in ("dataset", "leadocean+dataset") and config.dataset_path:
+    active = active_sources(config)
+    if "dataset" in active:
         dataset.rows(config)
-    if name in ("leadocean", "leadocean+dataset") and config.leadocean_base_url:
+    if "leadocean" in active:
         leadocean.validate(config)
 
-    if name == "leadocean+dataset":
-        if bool(config.leadocean_api_key) != bool(config.leadocean_base_url):
+    for source, fields in (("leadocean", ("leadocean_api_key", "leadocean_base_url")),):
+        half = [f for f in fields if getattr(config, f)]
+        if source in discovery_sources(config) and source not in active and half:
             logger.warning(
                 "Lead Ocean is half configured (set both %sLEADOCEAN_API_KEY and "
                 "%sLEADOCEAN_BASE_URL) — it is being ignored this run", ENV_PREFIX, ENV_PREFIX)
-
 
 def _agent_qualify_active() -> bool:
     from openoutfind.core import agent_qualify

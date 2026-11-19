@@ -137,6 +137,13 @@ def _take_in(arm, result, round_number: int):
             "terms": arm.terms.as_json(), "move": arm.move, **_shape()})
 
     if arm.number == 1 and not fetched.leads:
+        if fetched.leads_found is None:
+            # No count and no rows is not "nobody matches": Lead Ocean withholds its total
+            # when a filter could not be applied, and an empty page then says nothing about
+            # the search. Leave no trace, as a transport artifact does.
+            logger.warning("%s", step_line("fetch", "empty page and no count — not read as "
+                                                    "an empty search", glyph="⚠", color="yellow"))
+            return None
         if fetched.leads_found:
             logger.warning("%s", step_line("fetch", f"empty page but {fetched.leads_found:,} "
                                                     f"in the index — transport artifact",

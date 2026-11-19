@@ -10,7 +10,7 @@ notices of the upstream project are retained.
 
 Changes made by Hybrowlabs (OPS-636), as required by section 4(b) of the licence:
 
-  - Added openoutfind/providers/ (Lead Ocean, dataset file, and the selector).
+  - Added openoutfind/providers/ (Lead Ocean, dataset file, and the source stream that also reads Lead Finder).
   - Discovery now goes through the configured provider instead of BetterContact only:
     openoutfind/core/pipeline/walk.py, openoutfind/core/pipeline/discover.py.
   - New configuration fields and provider validation: openoutfind/core/config.py,

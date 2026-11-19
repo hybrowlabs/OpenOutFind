@@ -1,119 +1,158 @@
 # openoutfind/providers/__init__.py
-"""Discovery sources behind the walk: Lead Ocean, an operator dataset, or upstream's
-BetterContact Lead Finder.
+"""Discovery sources behind the walk: the dataset, Lead Ocean, and BetterContact Lead Finder.
 
 **Why this exists (hybrowlabs fork, OPS-636).** Upstream discovery is BetterContact Lead
 Finder and nothing else. The walk only needs one thing from a source: *given a Lead Finder
 filter set, a page size and an offset, return rows in Lead Finder's row shape and a count*.
-That is ``discovery.Fetched``, and it is the seam. Everything downstream — the headline
-gate, the store, the embeddings, the qualifier — reads Lead Finder row keys
-(``contact_full_name``, ``company_keywords`` ...), so a provider's whole job is to hand back
-rows in that shape. Nothing else in the pipeline knows which source a row came from.
+That is ``discovery.Fetched``, and it is the seam. Everything downstream reads Lead Finder
+row keys, so a source's whole job is to hand back rows in that shape.
 
-* ``bettercontact`` — upstream, unchanged (``discovery.search``).
-* ``leadocean`` — HTTP search against Lead Ocean (``providers/leadocean.py``).
-* ``dataset`` — a CSV/JSONL file the operator supplies, filtered locally
-  (``providers/dataset.py``).
-* ``leadocean+dataset`` — the fork's default: the dataset is read first, then Lead Ocean,
-  as one continuous stream so offsets stay consistent across pages.
+``OPENOUTFIND_DISCOVERY_PROVIDER`` names the sources, one or several joined with ``+``:
 
-Selected by ``OPENOUTFIND_DISCOVERY_PROVIDER``. Credentials and paths are environment-only.
+* ``dataset`` — a CSV/JSONL file the operator supplies, filtered locally, free.
+* ``leadocean`` — Lead Ocean's people search. **A page costs records** (one per person
+  returned); the count does not.
+* ``bettercontact`` (also ``leadfinder``) — upstream's Lead Finder, free, unchanged.
+* ``dataset+leadocean+leadfinder`` — the default. The dataset is read first, then Lead
+  Ocean, then Lead Finder, as one stream. A source that is not configured is skipped, so
+  the default searches whichever of the three the operator actually has.
+
+The count is the sum of the sources, reported at offset 0 only. A source that cannot say
+how many it holds (Lead Ocean withholds its total) makes the whole count unknown: reporting
+the others alone would tell the walk the search ends where they do.
 """
 from __future__ import annotations
 
-from openoutfind.core.config import SiteConfig, discovery_provider, required_discovery_fields
+import json
+import logging
+import threading
+
+from openoutfind.core.config import (
+    SiteConfig, active_sources, discovery_provider, required_discovery_fields,
+)
+
+logger = logging.getLogger(__name__)
+
+_LABELS = {"dataset": "the dataset", "leadocean": "Lead Ocean", "bettercontact": "Lead Finder"}
 
 
 def provider_name(config: SiteConfig | None = None) -> str:
-    """The configured discovery provider's name (validated)."""
+    """The configured sources as one string, e.g. ``dataset+leadocean``."""
     return discovery_provider(config or SiteConfig.load())
 
 
 def is_configured(config: SiteConfig | None = None) -> bool:
-    """Whether the chosen provider has what it needs to search at all."""
+    """Whether the chosen sources have what they need to search at all."""
     config = config or SiteConfig.load()
     return not required_discovery_fields(config)
 
 
 def label(config: SiteConfig | None = None) -> str:
-    """The human name of the source, for log lines and status."""
-    return {
-        "bettercontact": "BetterContact",
-        "leadocean": "Lead Ocean",
-        "dataset": "the dataset",
-        "leadocean+dataset": "Lead Ocean + dataset",
-    }[provider_name(config)]
+    """The human name of the sources a search will read, for log lines and status."""
+    config = config or SiteConfig.load()
+    return " + ".join(_LABELS[s] for s in active_sources(config)) or "no discovery source"
 
 
 def search(config: SiteConfig, filters: dict, limit: int, offset: int, first_poll_s: float):
-    """Fetch one page from the configured source; returns ``discovery.Fetched``.
+    """One page of the configured stream; returns ``discovery.Fetched``.
 
     Thread-safe and quiet, like ``discovery.search``: the walk fires a round's pages from
-    worker threads. A source that cannot answer raises ``ProviderUnavailable`` (typed:
-    ``provider_auth``, ``provider_out_of_credits``, ``provider_rate_limited``, or plain
-    ``provider_unavailable``); it never answers with a silent empty page.
+    worker threads. A source that cannot answer raises ``ProviderUnavailable`` (typed) or
+    ``bad_config``; it never answers with a silent empty page, and a dead source never
+    falls through to the next one.
     """
-    name = provider_name(config)
-    if name == "bettercontact":
+    sources = active_sources(config)
+    if sources == ("bettercontact",):
         from openoutfind import discovery
 
         return discovery.search(config.bettercontact_api_key, filters, limit, offset,
                                 first_poll_s)
+    if sources == ("dataset",):
+        from openoutfind.providers import dataset
 
-    from openoutfind.providers import dataset, leadocean
-
-    if name == "dataset":
         return dataset.search(config, filters, limit, offset)
-    if name == "leadocean":
+    if sources == ("leadocean",):
+        from openoutfind.providers import leadocean
+
         return leadocean.search(config, filters, limit, offset)
-    return _search_both(config, filters, limit, offset)
+    return _search_stream(config, sources, filters, limit, offset, first_poll_s)
 
 
-def _search_both(config: SiteConfig, filters: dict, limit: int, offset: int):
-    """The dataset first, then Lead Ocean, as one stream paged by ``offset``.
+def _search_stream(config, sources, filters, limit, offset, first_poll_s):
+    """The chosen sources in order, as one stream paged by ``offset``.
 
-    A source that is not configured contributes nothing (``leadocean+dataset`` is satisfied
-    by either). Page ``offset..offset+limit`` of the stream is the dataset's slice and, when
-    that falls short of ``limit``, Lead Ocean's first rows from where the dataset ended. The
-    count is the sum of both, and like upstream's is only reported at offset 0. It is always
-    the full sum: when the dataset alone fills page one, Lead Ocean is still asked (for one
-    row) for its count, because the walk reads where a search ends off that number.
+    Page ``offset..offset+limit`` is filled from the first source, then the next from where
+    the previous ended. A source is counted only when the page needs to know where it
+    starts (counts are cached per search). One that will not say how many it holds ends the
+    stream: nothing after it can be placed, so it is read to its end and the sources behind
+    it are neither counted nor reached.
     """
     import time
 
     from openoutfind.discovery import Fetched, Page
-    from openoutfind.providers import dataset, leadocean
 
     started = time.monotonic()
-    use_dataset = bool(config.dataset_path)
-    use_ocean = bool(config.leadocean_api_key and config.leadocean_base_url)
-
     rows: list[dict] = []
-    dataset_total = 0
-    if use_dataset:
-        local = dataset.search(config, filters, limit, offset)
-        rows.extend(local.page.leads)
-        dataset_total = (local.page.leads_found if offset == 0
-                         else dataset.count(config, filters))
+    totals: list[int | None] = []
+    passed = 0
+    for source in sources:
+        if offset and len(rows) >= limit:
+            break  # the page is full; later sources need no count (only offset 0 reports one)
+        total = _total(config, source, filters, first_poll_s)
+        totals.append(total)
+        if len(rows) < limit and (total is None or offset < passed + total):
+            rows.extend(_slice(config, source, filters, limit - len(rows),
+                               max(0, offset - passed), first_poll_s))
+        if total is None:
+            break
+        passed += total
 
-    found_remote = None
-    if use_ocean:
-        if len(rows) < limit:
-            # The page runs past the end of the dataset: Lead Ocean supplies the rest,
-            # from its own offset (the stream's offset less what the dataset held).
-            remote = leadocean.search(config, filters, limit - len(rows),
-                                      max(0, offset - dataset_total))
-            rows.extend(remote.page.leads)
-            found_remote = remote.page.leads_found
-        elif offset == 0:
-            # The dataset filled page one, but the stream is longer than the dataset: the
-            # walk stores this count and reads "at the bottom" off it, so a dataset-only
-            # count would cut Lead Ocean off after one page. One row is enough to be
-            # told how many there are.
-            found_remote = leadocean.search(config, filters, 1, 0).page.leads_found
-
-    found = None
-    if offset == 0:
-        # The whole stream's size: the dataset's matches plus Lead Ocean's.
-        found = dataset_total + (found_remote or 0)
+    unknown = any(total is None for total in totals)
+    found = None if (offset or unknown) else sum(totals)
     return Fetched(Page(rows, found), time.monotonic() - started)
+
+_totals_lock = threading.Lock()
+_totals: dict[tuple, int | None] = {}
+
+
+def _total(config, source, filters, first_poll_s):
+    """One source's count for this search; ``None`` when it will not say.
+
+    Lead Ocean and the dataset count for free. Lead Finder's count costs a page's time, so
+    it is asked once per search and kept for the process.
+    """
+    if source == "dataset":
+        from openoutfind.providers import dataset
+
+        return dataset.count(config, filters)
+    if source == "leadocean":
+        from openoutfind.providers import leadocean
+
+        return leadocean.count(config, filters)
+
+    key = (source, json.dumps(filters, sort_keys=True, default=str))
+    with _totals_lock:
+        if key in _totals:
+            return _totals[key]
+    from openoutfind import discovery
+
+    found = discovery.search(config.bettercontact_api_key, filters, limit=1, offset=0,
+                             first_poll_s=first_poll_s).page.leads_found
+    with _totals_lock:
+        _totals[key] = found
+    return found
+
+
+def _slice(config, source, filters, limit, offset, first_poll_s):
+    if source == "dataset":
+        from openoutfind.providers import dataset
+
+        return dataset.search(config, filters, limit, offset).page.leads
+    if source == "leadocean":
+        from openoutfind.providers import leadocean
+
+        return leadocean.search(config, filters, limit, offset).page.leads
+    from openoutfind import discovery
+
+    return discovery.search(config.bettercontact_api_key, filters, limit, offset,
+                            first_poll_s).page.leads

@@ -54,7 +54,7 @@ ORIGIN_PROFILE_INFO = "profile_info"  # 1st-degree contact-info overlay
 def hub_enabled(config: SiteConfig | None = None) -> bool:
     """Whether this run may talk to the upstream hub at all (hybrowlabs fork, OPS-636).
 
-    **Off unless discovery is upstream's BetterContact.** The hub is a third party's shared
+    **Off unless upstream's BetterContact Lead Finder is the only source selected.** The hub is a third party's shared
     store: every discovery page, every employer record and every resolved address is given
     back to it, and every lookup names the profile being targeted. With Lead Ocean or our own
     dataset behind discovery, that would publish licensed and proprietary rows and our
@@ -62,9 +62,9 @@ def hub_enabled(config: SiteConfig | None = None) -> bool:
     shut here, at the one place every caller goes through, and only the upstream provider
     leaves it as upstream shipped it.
     """
-    from openoutfind.core.config import discovery_provider
+    from openoutfind.core.config import discovery_sources
 
-    return discovery_provider(config or SiteConfig.load()) == "bettercontact"
+    return discovery_sources(config or SiteConfig.load()) == ("bettercontact",)
 
 
 def token_in_hand(config: SiteConfig, *, mint: bool = True) -> str:
