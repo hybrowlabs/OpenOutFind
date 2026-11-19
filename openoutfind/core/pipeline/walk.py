@@ -73,16 +73,18 @@ def _shape() -> dict:
             "country_code": first.country_code}
 
 
-def _fire_all(arms, api_key: str) -> list:
+def _fire_all(arms, site_config) -> list:
     """Fire every arm at once; return each one's ``Fetched`` or the exception it raised.
 
     The threads make the API calls and nothing else, so an outage on one search is
-    handed back rather than raised in a worker.
+    handed back rather than raised in a worker. The source is the configured discovery
+    provider (``providers.search``): upstream's BetterContact, Lead Ocean, the dataset, or
+    Lead Ocean plus the dataset.
     """
     from openoutfind.core import meter
     from openoutfind.core.models import PAGE_SIZE
-    from openoutfind.discovery import search
-    from openoutfind.enrichment.bettercontact import BetterContactUnavailable
+    from openoutfind.enrichment.provider import ProviderUnavailable
+    from openoutfind.providers import search
 
     first_poll = meter.mean(meter.SEARCH_READY_SECONDS, FIRST_POLL_SECONDS)
     shape = _shape()
@@ -90,9 +92,9 @@ def _fire_all(arms, api_key: str) -> list:
 
     def fire(arm):
         try:
-            return search(api_key, arm.terms.to_filters(headcount), limit=PAGE_SIZE,
+            return search(site_config, arm.terms.to_filters(headcount), limit=PAGE_SIZE,
                           offset=(arm.number - 1) * PAGE_SIZE, first_poll_s=first_poll)
-        except BetterContactUnavailable as exc:
+        except ProviderUnavailable as exc:
             return exc
 
     with ThreadPoolExecutor(max_workers=len(arms)) as executor:
@@ -114,9 +116,9 @@ def _take_in(arm, result, round_number: int):
     from openoutfind.core.errors import ErrorType
     from openoutfind.core.models import PAGE_SIZE, Page, Search
     from openoutfind.discovery import query_header, step_line
-    from openoutfind.enrichment.bettercontact import BetterContactUnavailable
+    from openoutfind.enrichment.provider import ProviderUnavailable
 
-    if isinstance(result, BetterContactUnavailable):
+    if isinstance(result, ProviderUnavailable):
         if result.error_type != ErrorType.PROVIDER_UNAVAILABLE:
             raise result
         logger.warning("%s", step_line("fetch", f"provider unavailable ({result}) — "
@@ -135,6 +137,13 @@ def _take_in(arm, result, round_number: int):
             "terms": arm.terms.as_json(), "move": arm.move, **_shape()})
 
     if arm.number == 1 and not fetched.leads:
+        if fetched.leads_found is None:
+            # No count and no rows is not "nobody matches": Lead Ocean withholds its total
+            # when a filter could not be applied, and an empty page then says nothing about
+            # the search. Leave no trace, as a transport artifact does.
+            logger.warning("%s", step_line("fetch", "empty page and no count — not read as "
+                                                    "an empty search", glyph="⚠", color="yellow"))
+            return None
         if fetched.leads_found:
             logger.warning("%s", step_line("fetch", f"empty page but {fetched.leads_found:,} "
                                                     f"in the index — transport artifact",
@@ -213,7 +222,7 @@ def run_round(site_config, qualifier) -> Round | None:
             else search_arms.next_round(qualifier, number, site_config))
     if not arms:
         return None
-    results = _fire_all(arms, site_config.bettercontact_api_key)
+    results = _fire_all(arms, site_config)
 
     pages = [taken for arm, result in zip(arms, results)
              if (taken := _take_in(arm, result, number)) and taken[1]]

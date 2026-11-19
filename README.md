@@ -1,5 +1,11 @@
 ![OpenOutFind Logo](docs/logo.png)
 
+> **Hybrowlabs fork (OPS-636).** A modified copy of [eracle/OpenOutFind](https://github.com/eracle/OpenOutFind),
+> used under the Apache License 2.0 (see `LICENCE.md` and `NOTICE`). Discovery reads **Lead Ocean**, an
+> operator **dataset file** and BetterContact **Lead Finder** (free), whichever are configured; set
+> `OPENOUTFIND_DISCOVERY_PROVIDER=bettercontact` for upstream behaviour. The upstream contacts hub (give-back
+> and lookups) is **off** unless Lead Finder is the only source selected. This fork does not send email. See `docs/configuration.md` and `openoutfind/providers/`.
+
 # OpenOutFind — open-source AI agent for B2B lead generation
 
 > **Describe your product. Define your target market. The AI finds the people who fit — and tells you why each one does.**

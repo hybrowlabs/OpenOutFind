@@ -197,6 +197,7 @@ def pipeline_summary(site_config, buy_addresses: bool = True) -> str:
     """
     from django.db.models import Count
 
+    from openoutfind import providers
     from openoutfind.crm.models import Deal
     from openoutfind.enrichment import bettercontact
 
@@ -209,14 +210,17 @@ def pipeline_summary(site_config, buy_addresses: bool = True) -> str:
     waiting = [f"{counts.get(state, 0)} {phrase}" for state, phrase in _WAITING_ON]
 
     # Each gate said as its consequence rather than as its name — a boolean tells you
-    # nothing — and **every consequence it has**. The BetterContact key does two jobs
-    # (Lead Finder discovery *and* paid enrichment), so losing it stops both. What it
-    # does not stop is the free address sources: an address already on the lead and the
+    # nothing — and **every consequence it has**. In this fork discovery and the paid
+    # address lookup are two different gates: the discovery source (Lead Ocean / dataset /
+    # BetterContact) stops new leads arriving, and the BetterContact key stops only the paid
+    # lookup. Neither stops the free address sources: an address already on the lead and the
     # hub's cache are both still read. Qualification has no gate — it always runs.
     ranked = counts.get(DealState.READY_TO_FIND_EMAIL, 0)
 
-    if not bettercontact.is_configured():
-        held = " · no BetterContact key, so no new discovery and free address sources only"
+    if not providers.is_configured():
+        held = " · no discovery source configured, so no new discovery"
+    elif not bettercontact.is_configured():
+        held = " · no BetterContact key, so free address sources only"
     elif not buy_addresses and ranked:
         held = f" · {ranked} ranked but addresses not requested — add --emails to buy them"
     else:

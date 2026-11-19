@@ -360,24 +360,30 @@ class TestOneActionAtATime:
         idle = [r.getMessage() for r in caplog.records if "nothing to do" in r.getMessage()]
         assert len(idle) == 1 and "address on order" in idle[0]
 
-    def test_a_keyless_run_says_discovery_stopped_too_not_just_the_lookup(self, site_config):
-        """One key does two jobs, so losing it has two consequences and both get named.
+    def test_no_discovery_source_says_discovery_stopped(self, site_config):
+        """Without a discovery source the walk finds nobody at all, which is the larger of
+        the two consequences, so it is the one named (upstream: the BetterContact key)."""
+        summary = cycle.pipeline_summary(site_config)
 
-        Naming only the address half sent the operator after the wrong thing: without a
-        key the walk finds nobody at all, which is the larger of the two.
-        """
-        with patch("openoutfind.enrichment.bettercontact.is_configured", return_value=False):
-            summary = cycle.pipeline_summary(site_config)
+        assert "no new discovery" in summary
 
-        assert "no new discovery" in summary and "free address sources only" in summary
+    def test_discovery_and_the_paid_lookup_are_separate_gates(self, configure):
+        """In the fork a Lead Ocean / dataset install has no BetterContact key and still
+        discovers: only the paid address lookup is off, and the summary says exactly that."""
+        site = configure(discovery_provider="dataset", dataset_path="people.csv")
 
-    def test_ranked_leads_and_no_emails_flag_names_that_gate(self, site_config):
+        summary = cycle.pipeline_summary(site)
+
+        assert "no new discovery" not in summary
+        assert "no BetterContact key, so free address sources only" in summary
+
+    def test_ranked_leads_and_no_emails_flag_names_that_gate(self, configure):
         """The gate most likely to be holding on a bare `find` is the one it never
         mentioned: spending is opt-in, and an operator expecting addresses has to be
         told which flag turns it on."""
-        _deal(site_config, DealState.READY_TO_FIND_EMAIL)
+        site = configure(bettercontact_api_key="k")
+        _deal(site, DealState.READY_TO_FIND_EMAIL)
 
-        with patch("openoutfind.enrichment.bettercontact.is_configured", return_value=True):
-            summary = cycle.pipeline_summary(site_config, buy_addresses=False)
+        summary = cycle.pipeline_summary(site, buy_addresses=False)
 
         assert "--emails" in summary

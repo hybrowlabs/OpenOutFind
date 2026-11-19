@@ -101,7 +101,7 @@ class TestItNamesEverythingMissingAtOnce:
     def test_a_bare_environment_names_every_group(self, site_config):
         missing = readiness.missing_variables()
 
-        assert set(missing) == {"campaign", "llm", "bettercontact"}
+        assert set(missing) == {"campaign", "llm", "discovery"}
         with pytest.raises(OpenOutFindError) as raised:
             readiness.check_ready()
 
@@ -119,7 +119,7 @@ class TestItNamesEverythingMissingAtOnce:
         monkeypatch.delenv("OPENOUTFIND_BETTERCONTACT_API_KEY")
 
         assert readiness.missing_variables() == {
-            "bettercontact": ["OPENOUTFIND_BETTERCONTACT_API_KEY"]}
+            "discovery": ["OPENOUTFIND_BETTERCONTACT_API_KEY"]}
 
     def test_no_legal_notice_flag_is_asked_for(self, ready, monkeypatch):
         monkeypatch.delenv("OPENOUTFIND_ACCEPT_LEGAL_NOTICE", raising=False)

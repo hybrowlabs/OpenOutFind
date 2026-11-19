@@ -14,7 +14,7 @@ description = "Open-source AI lead finder: describe your product, get qualified 
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
-license-files = ["LICENCE.md"]
+license-files = ["LICENCE.md", "NOTICE"]
 authors = [{ name = "OpenOutFind", email = "hello@openoutreach.app" }]
 keywords = [
     "lead-generation",
@@ -100,4 +100,4 @@ packages = ["openoutfind"]
 [tool.hatch.build.targets.sdist]
 # LEGAL_NOTICE.md is here because the wheel force-includes it: `python -m build`
 # builds the wheel *from the sdist*, so a file missing here fails the release.
-include = ["openoutfind", "README.md", "LICENCE.md", "LEGAL_NOTICE.md", "pyproject.toml"]
+include = ["openoutfind", "README.md", "LICENCE.md", "NOTICE", "LEGAL_NOTICE.md", "pyproject.toml"]

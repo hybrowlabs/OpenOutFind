@@ -32,12 +32,12 @@ from __future__ import annotations
 import logging
 
 from openoutfind.core.config import (
-    REQUIRED_DISCOVERY_FIELDS,
     REQUIRED_ICP_FIELDS,
     REQUIRED_LLM_FIELDS,
     ENV_PREFIX,
     SiteConfig,
     missing,
+    required_discovery_fields,
 )
 from openoutfind.core import company_cap
 from openoutfind.core.errors import ErrorType, OpenOutFindError
@@ -48,7 +48,7 @@ OPERATOR_EMAIL = ENV_PREFIX + "OPERATOR_EMAIL"
 
 # The groups a run is checked in, in the order somebody would go and find the values.
 # They are how the failure reads, not how it is enforced — every one is variables.
-GROUPS = ("campaign", "llm", "bettercontact")
+GROUPS = ("campaign", "llm", "discovery")
 
 
 def check_ready() -> None:
@@ -69,6 +69,10 @@ def check_ready() -> None:
     # A malformed cap stops the run here, before any page is fetched or verdict asked.
     company_cap.limit()
 
+    # A dataset that cannot be read (missing file, wrong columns) or a Lead Ocean URL that is
+    # not https is a bad_config now, not a failure in the middle of the first round.
+    _check_sources()
+
     if not _agent_qualify_active():
         _check_llm()
     _ensure_operator()
@@ -87,10 +91,35 @@ def missing_variables() -> dict[str, list[str]]:
         # calling agent answering instead of a second, separately-keyed model — so an
         # install running only that way is not asked for a key it will never spend.
         "llm": [] if _agent_qualify_active() else missing(config, REQUIRED_LLM_FIELDS),
-        "bettercontact": missing(config, REQUIRED_DISCOVERY_FIELDS),
+        "discovery": missing(config, required_discovery_fields(config)),
     }
     return {group: names for group, names in groups.items() if names}
 
+
+def _check_sources() -> None:
+    """Prove the chosen discovery sources are usable before a round (``bad_config``).
+
+    A dataset is loaded (missing file, wrong columns); a Lead Ocean base URL must be
+    ``https://``. With several sources one complete source is enough, so a half-configured
+    other one is not an error — but it is named, since the operator meant to use it and
+    would otherwise never know it was ignored.
+    """
+    from openoutfind.core.config import active_sources, discovery_sources
+    from openoutfind.providers import dataset, leadocean
+
+    config = SiteConfig.load()
+    active = active_sources(config)
+    if "dataset" in active:
+        dataset.rows(config)
+    if "leadocean" in active:
+        leadocean.validate(config)
+
+    for source, fields in (("leadocean", ("leadocean_api_key", "leadocean_base_url")),):
+        half = [f for f in fields if getattr(config, f)]
+        if source in discovery_sources(config) and source not in active and half:
+            logger.warning(
+                "Lead Ocean is half configured (set both %sLEADOCEAN_API_KEY and "
+                "%sLEADOCEAN_BASE_URL) — it is being ignored this run", ENV_PREFIX, ENV_PREFIX)
 
 def _agent_qualify_active() -> bool:
     from openoutfind.core import agent_qualify

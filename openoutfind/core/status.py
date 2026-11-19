@@ -206,7 +206,8 @@ def _blocked(config: dict, credits: dict, totals: dict) -> list[dict]:
     if credits["error"] == ErrorType.NO_CREDENTIAL:
         blocked.append({
             "type": ErrorType.NO_CREDENTIAL,
-            "message": "no BetterContact key — discovery and email finding are both off",
+            "message": "no BetterContact key — paid email finding is off "
+                       "(discovery runs on its own source and is not affected)",
         })
     elif credits["error"] == ErrorType.PROVIDER_AUTH:
         blocked.append({

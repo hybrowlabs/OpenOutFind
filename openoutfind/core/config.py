@@ -47,10 +47,20 @@ REQUIRED_LLM_FIELDS = ("ai_model", "llm_api_key")
 # — every LLM call this tool makes renders one of them into its prompt.
 REQUIRED_ICP_FIELDS = ("product_docs", "campaign_target")
 
-# Discovery itself, which is free, runs on the BetterContact key; enrichment spends it.
-# An install without one cannot search at all, so it is required rather than optional.
-REQUIRED_DISCOVERY_FIELDS = ("bettercontact_api_key",)
+# Where leads are discovered. Upstream shipped one source, BetterContact Lead Finder; this
+# fork (OPS-636) adds Lead Ocean and an operator-supplied dataset file behind the same walk.
+# ``OPENOUTFIND_DISCOVERY_PROVIDER`` is one source or several joined with ``+`` (see
+# ``discovery_sources``); ``leadfinder`` is another name for ``bettercontact``.
+DISCOVERY_SOURCES = ("dataset", "leadocean", "bettercontact")
+_SOURCE_ALIASES = {"leadfinder": "bettercontact", "lead_finder": "bettercontact"}
+DEFAULT_DISCOVERY_PROVIDER = "dataset+leadocean+leadfinder"
 
+# What each source needs to search at all.
+_DISCOVERY_FIELDS = {
+    "bettercontact": ("bettercontact_api_key",),
+    "leadocean": ("leadocean_api_key", "leadocean_base_url"),
+    "dataset": ("dataset_path",),
+}
 
 @dataclass(frozen=True)
 class SiteConfig:
@@ -76,6 +86,14 @@ class SiteConfig:
     # BetterContact's key powers Lead Finder *discovery*, which is billed nothing, and the
     # paid email lookup behind `--emails`.
     bettercontact_api_key: str = ""
+
+    # Discovery source (OPS-636). Blank means ``DEFAULT_DISCOVERY_PROVIDER``. The Lead Ocean
+    # key and base URL and the dataset path come from the environment only; they are never
+    # written to the store or the repo.
+    discovery_provider: str = ""
+    leadocean_api_key: str = ""
+    leadocean_base_url: str = ""
+    dataset_path: str = ""
 
     # The operator's own ISO-3166 alpha-2 jurisdiction — not to be confused with
     # `Lead.country_code`, the per-lead target country an ICP search surfaced someone
@@ -113,6 +131,54 @@ def missing(config: SiteConfig, field_names) -> list[str]:
     """The variables that would have filled the named fields this run lacks."""
     return [variable_for(name) for name in field_names if not getattr(config, name)]
 
+
+def discovery_sources(config: SiteConfig) -> tuple[str, ...]:
+    """The sources this run searches, in a fixed order; ``bad_config`` on a name we do not ship.
+
+    ``dataset+leadocean+leadfinder`` (the default) searches every source that is configured;
+    a single name searches that one and requires it. Duplicates collapse.
+    """
+    from openoutfind.core.errors import ErrorType, OpenOutFindError
+
+    raw = (config.discovery_provider or DEFAULT_DISCOVERY_PROVIDER).strip().lower()
+    names = [_SOURCE_ALIASES.get(part.strip(), part.strip()) for part in raw.split("+")]
+    unknown = [name for name in names if name not in DISCOVERY_SOURCES]
+    if unknown or not names:
+        raise OpenOutFindError(
+            ErrorType.BAD_CONFIG,
+            f"{variable_for('discovery_provider')}={raw!r} names no discovery source "
+            f"({', '.join(unknown) or 'empty'}); use {', '.join(DISCOVERY_SOURCES)} "
+            f"(or leadfinder), joined with +")
+    return tuple(source for source in DISCOVERY_SOURCES if source in names)
+
+
+def discovery_provider(config: SiteConfig) -> str:
+    """The sources as one canonical string, e.g. ``dataset+leadocean``."""
+    return "+".join(discovery_sources(config))
+
+
+def source_configured(config: SiteConfig, source: str) -> bool:
+    """Whether one source has everything it needs."""
+    return all(getattr(config, field) for field in _DISCOVERY_FIELDS[source])
+
+
+def active_sources(config: SiteConfig) -> tuple[str, ...]:
+    """The chosen sources that are complete — the ones a search will actually read."""
+    return tuple(s for s in discovery_sources(config) if source_configured(config, s))
+
+
+def required_discovery_fields(config: SiteConfig) -> tuple[str, ...]:
+    """The fields still missing for the chosen sources, as field names.
+
+    One source named: that source's own missing fields. Several: any one complete source is
+    enough, so nothing is missing; when none is, every way out is named in one error.
+    """
+    sources = discovery_sources(config)
+    if len(sources) == 1:
+        return tuple(f for f in _DISCOVERY_FIELDS[sources[0]] if not getattr(config, f))
+    if active_sources(config):
+        return ()
+    return tuple(f for s in sources for f in _DISCOVERY_FIELDS[s])
 
 def _from_environment(variable: str) -> str:
     """One `OPENOUTFIND_*` value, stripped — "" whether it was unset or blank."""

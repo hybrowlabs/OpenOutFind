@@ -51,8 +51,27 @@ ORIGIN_PROFILE_INFO = "profile_info"  # 1st-degree contact-info overlay
 # a compact fast path for the vendors this client ships, never the gate on legibility.
 
 
+def hub_enabled(config: SiteConfig | None = None) -> bool:
+    """Whether this run may talk to the upstream hub at all (hybrowlabs fork, OPS-636).
+
+    **Off unless upstream's BetterContact Lead Finder is the only source selected.** The hub is a third party's shared
+    store: every discovery page, every employer record and every resolved address is given
+    back to it, and every lookup names the profile being targeted. With Lead Ocean or our own
+    dataset behind discovery, that would publish licensed and proprietary rows and our
+    targeting to somebody else. So the whole hub path (reads, give-back, identity minting) is
+    shut here, at the one place every caller goes through, and only the upstream provider
+    leaves it as upstream shipped it.
+    """
+    from openoutfind.core.config import discovery_sources
+
+    return discovery_sources(config or SiteConfig.load()) == ("bettercontact",)
+
+
 def token_in_hand(config: SiteConfig, *, mint: bool = True) -> str:
     """This run's hub token — the one it was given, or the one it registered for.
+
+    Blank whenever the hub is not enabled for this run (``hub_enabled``), which every
+    caller already reads as *no store this run*.
 
     Blank when there is no operator email to register with, or the hub could not be
     reached; every caller reads that as *no store this run* and falls back, exactly as a
@@ -64,6 +83,8 @@ def token_in_hand(config: SiteConfig, *, mint: bool = True) -> str:
     """
     global _minted_token
 
+    if not hub_enabled(config):
+        return ""
     if config.contacts_api_token:
         return config.contacts_api_token
     if _minted_token is None and mint:
@@ -123,6 +144,8 @@ def contribute(lead, emails: list[str], origin: str) -> None:
     with their discovery page (``share_profiles``). An operator who declares none contributes; the server
     re-gates every record authoritatively.
     """
+    if not hub_enabled():
+        return  # includes the register-on-first-contribution path below
     operator_country = SiteConfig.load().operator_country_code
     if operator_country and is_eea_located(operator_country):
         logger.debug("hub: operator in EEA/UK/CH — skipping give-back for %s", lead.profile_url)
